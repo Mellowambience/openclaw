@@ -287,3 +287,76 @@ describe("resolveConfigEnvVars", () => {
     });
   });
 });
+
+describe("resolveConfigEnvVars — lenient mode", () => {
+  it("preserves ${VAR} token when var is missing and lenient is true", () => {
+    const result = resolveConfigEnvVars(
+      { key: "${GATEWAY_ONLY_VAR}" },
+      {},
+      { lenient: true },
+    );
+    expect(result).toEqual({ key: "${GATEWAY_ONLY_VAR}" });
+  });
+
+  it("still throws MissingEnvVarError when lenient is false (default)", () => {
+    expect(() =>
+      resolveConfigEnvVars({ key: "${MISSING_VAR}" }, {}, { lenient: false }),
+    ).toThrow(MissingEnvVarError);
+  });
+
+  it("substitutes vars that ARE present even in lenient mode", () => {
+    const result = resolveConfigEnvVars(
+      { key: "${PRESENT_VAR}" },
+      { PRESENT_VAR: "hello" },
+      { lenient: true },
+    );
+    expect(result).toEqual({ key: "hello" });
+  });
+
+  it("preserves only missing vars, substitutes present ones in same string", () => {
+    const result = resolveConfigEnvVars(
+      { key: "${PRESENT}:${GATEWAY_ONLY}" },
+      { PRESENT: "value" },
+      { lenient: true },
+    );
+    expect(result).toEqual({ key: "value:${GATEWAY_ONLY}" });
+  });
+
+  it("handles nested objects with mixed present/missing vars in lenient mode", () => {
+    const result = resolveConfigEnvVars(
+      {
+        docker: {
+          env: {
+            GITHUB_PAT: "${GITHUB_PAT}",
+            OPENAI_KEY: "${OPENAI_API_KEY}",
+          },
+        },
+      },
+      { OPENAI_API_KEY: "sk-real" },
+      { lenient: true },
+    );
+    expect(result).toEqual({
+      docker: {
+        env: {
+          GITHUB_PAT: "${GITHUB_PAT}",
+          OPENAI_KEY: "sk-real",
+        },
+      },
+    });
+  });
+
+  it("preserves ${VAR} in arrays in lenient mode", () => {
+    const result = resolveConfigEnvVars(
+      { items: ["${MISSING_A}", "${PRESENT_B}", "${MISSING_C}"] },
+      { PRESENT_B: "found" },
+      { lenient: true },
+    );
+    expect(result).toEqual({ items: ["${MISSING_A}", "found", "${MISSING_C}"] });
+  });
+
+  it("default options = strict (no lenient param throws)", () => {
+    expect(() =>
+      resolveConfigEnvVars({ key: "${NO_SUCH_VAR}" }, {}),
+    ).toThrow(MissingEnvVarError);
+  });
+});
