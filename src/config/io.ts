@@ -499,6 +499,7 @@ function resolveConfigIncludesForRead(
 function resolveConfigForRead(
   resolvedIncludes: unknown,
   env: NodeJS.ProcessEnv,
+  lenient = false,
 ): ConfigReadResolution {
   // Apply config.env to process.env BEFORE substitution so ${VAR} can reference config-defined vars.
   if (resolvedIncludes && typeof resolvedIncludes === "object" && "env" in resolvedIncludes) {
@@ -506,7 +507,7 @@ function resolveConfigForRead(
   }
 
   return {
-    resolvedConfigRaw: resolveConfigEnvVars(resolvedIncludes, env),
+    resolvedConfigRaw: resolveConfigEnvVars(resolvedIncludes, env, { lenient }),
     // Capture env snapshot after substitution for write-time ${VAR} restoration.
     envSnapshotForRestore: { ...env } as Record<string, string | undefined>,
   };
@@ -543,9 +544,15 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
       const raw = deps.fs.readFileSync(configPath, "utf-8");
       const parsed = deps.json5.parse(raw);
+      // Use lenient substitution so CLI commands (e.g. `openclaw doctor`,
+      // `openclaw gateway status`) can read the config even when some ${VAR}
+      // references are only present in the gateway's systemd EnvironmentFile=
+      // and are therefore absent from the CLI process environment.
+      // See: https://github.com/openclaw/openclaw/issues/21130
       const { resolvedConfigRaw: resolvedConfig } = resolveConfigForRead(
         resolveConfigIncludesForRead(parsed, configPath, deps),
         deps.env,
+        /* lenient */ true,
       );
       warnOnConfigMiskeys(resolvedConfig, deps.logger);
       if (typeof resolvedConfig !== "object" || resolvedConfig === null) {
