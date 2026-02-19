@@ -4,7 +4,8 @@
  * Supports `${VAR_NAME}` syntax in string values, substituted at config load time.
  * - Only uppercase env vars are matched: `[A-Z_][A-Z0-9_]*`
  * - Escape with `$${}` to output literal `${}`
- * - Missing env vars throw `MissingEnvVarError` with context
+ * - Missing env vars throw `MissingEnvVarError` with context (strict mode, default)
+ * - In lenient mode, missing env vars are left as the original `${VAR}` placeholder
  *
  * @example
  * ```json5
@@ -75,7 +76,12 @@ function parseEnvTokenAt(value: string, index: number): EnvToken | null {
   return null;
 }
 
-function substituteString(value: string, env: NodeJS.ProcessEnv, configPath: string): string {
+function substituteString(
+  value: string,
+  env: NodeJS.ProcessEnv,
+  configPath: string,
+  lenient: boolean,
+): string {
   if (!value.includes("$")) {
     return value;
   }
@@ -98,6 +104,15 @@ function substituteString(value: string, env: NodeJS.ProcessEnv, configPath: str
     if (token?.kind === "substitution") {
       const envValue = env[token.name];
       if (envValue === undefined || envValue === "") {
+        if (lenient) {
+          // Leave the original placeholder intact so CLI commands that don't
+          // need the gateway-only env var can still parse the config without
+          // failing. The gateway service resolves the var from its own
+          // EnvironmentFile= at runtime.
+          chunks.push(`\${${token.name}}`);
+          i = token.end;
+          continue;
+        }
         throw new MissingEnvVarError(token.name, configPath);
       }
       chunks.push(envValue);
@@ -136,20 +151,27 @@ export function containsEnvVarReference(value: string): boolean {
   return false;
 }
 
-function substituteAny(value: unknown, env: NodeJS.ProcessEnv, path: string): unknown {
+function substituteAny(
+  value: unknown,
+  env: NodeJS.ProcessEnv,
+  path: string,
+  lenient: boolean,
+): unknown {
   if (typeof value === "string") {
-    return substituteString(value, env, path);
+    return substituteString(value, env, path, lenient);
   }
 
   if (Array.isArray(value)) {
-    return value.map((item, index) => substituteAny(item, env, `${path}[${index}]`));
+    return value.map((item, index) =>
+      substituteAny(item, env, `${path}[${index}]`, lenient),
+    );
   }
 
   if (isPlainObject(value)) {
     const result: Record<string, unknown> = {};
     for (const [key, val] of Object.entries(value)) {
       const childPath = path ? `${path}.${key}` : key;
-      result[key] = substituteAny(val, env, childPath);
+      result[key] = substituteAny(val, env, childPath, lenient);
     }
     return result;
   }
@@ -163,9 +185,17 @@ function substituteAny(value: unknown, env: NodeJS.ProcessEnv, path: string): un
  *
  * @param obj - The parsed config object (after JSON5 parse and $include resolution)
  * @param env - Environment variables to use for substitution (defaults to process.env)
+ * @param options.lenient - When `true`, missing env vars are left as the original
+ *   `${VAR}` placeholder instead of throwing `MissingEnvVarError`. Use this for
+ *   CLI commands that read config for structural inspection but do not require
+ *   gateway-only secrets (e.g., `openclaw doctor`, `openclaw gateway status`).
  * @returns The config object with env vars substituted
- * @throws {MissingEnvVarError} If a referenced env var is not set or empty
+ * @throws {MissingEnvVarError} If a referenced env var is not set or empty (strict mode only)
  */
-export function resolveConfigEnvVars(obj: unknown, env: NodeJS.ProcessEnv = process.env): unknown {
-  return substituteAny(obj, env, "");
+export function resolveConfigEnvVars(
+  obj: unknown,
+  env: NodeJS.ProcessEnv = process.env,
+  { lenient = false }: { lenient?: boolean } = {},
+): unknown {
+  return substituteAny(obj, env, "", lenient);
 }
